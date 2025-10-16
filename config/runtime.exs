@@ -117,3 +117,8 @@ if config_env() == :prod do
   #
   # See https://hexdocs.pm/swoosh/Swoosh.html#module-installation for details.
 end
+
+# Solana configuration - available in all environments
+config :airdropper, :solana,
+  rpc_url: System.get_env("SOLANA_RPC_URL") || "https://api.devnet.solana.com",
+  authority_private_key: System.get_env("AUTHORITY_PRIVATE_KEY")

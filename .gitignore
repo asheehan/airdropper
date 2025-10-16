@@ -35,3 +35,12 @@ airdropper-*.tar
 npm-debug.log
 /assets/node_modules/
 
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Solana keypairs (NEVER commit private keys!)
+devnet-authority.json
+*.json.key
+*-keypair.json
