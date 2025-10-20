@@ -67,7 +67,8 @@ defmodule Airdropper.MixProject do
       {:dns_cluster, "~> 0.2.0"},
       {:bandit, "~> 1.5"},
       # project-specific
-      {:solana, "~> 0.2"}
+      {:solana, "~> 0.2"},
+      {:nimble_csv, "~> 1.2"}
     ]
   end
 

@@ -1,11 +1,13 @@
 defmodule AirdropperWeb.AirdropLive do
   use AirdropperWeb, :live_view
 
+  alias Airdropper.CSVParser
+
   @impl true
   def mount(_params, _session, socket) do
     socket =
       socket
-      |> assign(:uploaded_files, [])
+      |> assign(:parsed_entries, [])
       |> assign(:processing, false)
       |> assign(:error_message, nil)
       |> allow_upload(:csv_file,
@@ -30,17 +32,32 @@ defmodule AirdropperWeb.AirdropLive do
 
   @impl true
   def handle_event("save", _params, socket) do
-    uploaded_files =
-      consume_uploaded_entries(socket, :csv_file, fn %{path: path}, _entry ->
-        # For now, just store the file path
-        # In the next phase, we'll process the CSV
-        {:ok, path}
-      end)
-
     socket =
-      socket
-      |> update(:uploaded_files, &(&1 ++ uploaded_files))
-      |> put_flash(:info, "File uploaded successfully!")
+      consume_uploaded_entries(socket, :csv_file, fn %{path: path}, _entry ->
+        case CSVParser.parse_file(path) do
+          {:ok, entries} ->
+            {:ok, entries}
+
+          {:error, reason} ->
+            {:postpone, reason}
+        end
+      end)
+      |> case do
+        [] ->
+          socket
+          |> put_flash(:error, "No file was uploaded")
+
+        [entries] when is_list(entries) ->
+          socket
+          |> assign(:parsed_entries, entries)
+          |> assign(:error_message, nil)
+          |> put_flash(:info, "Successfully parsed #{length(entries)} airdrop entries!")
+
+        [error_reason] when is_binary(error_reason) ->
+          socket
+          |> assign(:error_message, error_reason)
+          |> put_flash(:error, error_reason)
+      end
 
     {:noreply, socket}
   end
@@ -166,14 +183,43 @@ defmodule AirdropperWeb.AirdropLive do
             </div>
           </form>
 
-          <%= if @uploaded_files != [] do %>
+          <%= if @parsed_entries != [] do %>
             <div class="mt-6">
-              <h3 class="font-semibold mb-2">Uploaded Files:</h3>
-              <ul class="list-disc list-inside">
-                <%= for file <- @uploaded_files do %>
-                  <li class="text-sm"><%= file %></li>
-                <% end %>
-              </ul>
+              <h3 class="font-semibold mb-3">Parsed Airdrop Entries (<%= length(@parsed_entries) %> total):</h3>
+              <div class="overflow-x-auto">
+                <table class="table table-zebra table-sm">
+                  <thead>
+                    <tr>
+                      <th>#</th>
+                      <th>Wallet Address</th>
+                      <th class="text-right">Amount (SOL)</th>
+                      <th class="text-right">Amount (Lamports)</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <%= for {entry, idx} <- Enum.with_index(@parsed_entries, 1) do %>
+                      <tr>
+                        <td><%= idx %></td>
+                        <td class="font-mono text-xs"><%= entry.address %></td>
+                        <td class="text-right"><%= entry.amount / 1_000_000_000 %></td>
+                        <td class="text-right font-mono text-xs"><%= entry.amount %></td>
+                      </tr>
+                    <% end %>
+                  </tbody>
+                </table>
+              </div>
+              <div class="mt-4 stats shadow">
+                <div class="stat">
+                  <div class="stat-title">Total Entries</div>
+                  <div class="stat-value text-2xl"><%= length(@parsed_entries) %></div>
+                </div>
+                <div class="stat">
+                  <div class="stat-title">Total Amount</div>
+                  <div class="stat-value text-2xl">
+                    <%= Enum.sum(Enum.map(@parsed_entries, & &1.amount)) / 1_000_000_000 %> SOL
+                  </div>
+                </div>
+              </div>
             </div>
           <% end %>
         </div>

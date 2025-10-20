@@ -3,7 +3,7 @@ defmodule AirdropperWeb.AirdropLiveTest do
 
   import Phoenix.LiveViewTest
 
-  describe "AirdropLive" do
+  describe "AirdropLive - mount and rendering" do
     test "disconnected and connected mount", %{conn: conn} do
       {:ok, page_live, disconnected_html} = live(conn, ~p"/airdrop")
       assert disconnected_html =~ "Solana Airdrop Manager"
@@ -27,6 +27,12 @@ defmodule AirdropperWeb.AirdropLiveTest do
     test "upload button is disabled when no file selected", %{conn: conn} do
       {:ok, view, _html} = live(conn, ~p"/airdrop")
       assert render(view) =~ "disabled"
+    end
+
+    test "does not display parsed entries on initial load", %{conn: conn} do
+      {:ok, _view, html} = live(conn, ~p"/airdrop")
+      refute html =~ "Parsed Airdrop Entries"
+      refute html =~ "Total Entries"
     end
   end
 end
