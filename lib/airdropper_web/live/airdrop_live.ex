@@ -48,6 +48,8 @@ defmodule AirdropperWeb.AirdropLive do
   @impl true
   def render(assigns) do
     ~H"""
+    <.flash kind={:info} flash={@flash} />
+    <.flash kind={:error} flash={@flash} />
     <div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-10">
       <div class="mb-8">
         <h1 class="text-3xl font-bold text-base-content">
@@ -87,16 +89,10 @@ defmodule AirdropperWeb.AirdropLive do
                     />
                   </svg>
                   <div>
-                    <label for={@uploads.csv_file.ref} class="btn btn-primary btn-sm">
+                    <label class="btn btn-primary btn-sm cursor-pointer">
+                      <.live_file_input upload={@uploads.csv_file} class="hidden" />
                       Choose File
                     </label>
-                    <input
-                      type="file"
-                      id={@uploads.csv_file.ref}
-                      class="hidden"
-                      phx-hook="Phoenix.LiveView.Upload"
-                      data-phx-upload-ref={@uploads.csv_file.ref}
-                    />
                     <p class="text-sm text-base-content/60 mt-2">
                       or drag and drop
                     </p>

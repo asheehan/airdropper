@@ -1,0 +1,10 @@
+invalid_wallet_address,1.5
+7xswpE8H9VJqKzXCj3R4N2Lb5WmTqDvFgHkPaUyM3nZs,not_a_number
+too_short_address,2.0
+9kLmN3pQ7rStUvWxYz2aBcDeFgHiJkLmNoPqRsTuVwXy,-5.0
+,1.0
+7xswpE8H9VJqKzXCj3R4N2Lb5WmTqDvFgHkPaUyM3nZs,
+missing_amount_column
+3aBcDeFgHiJkLmNoPqRsTuVwXyZ1234567890AbCdEf,0.5,extra_column
+this_line_has_only_one_value
+5GhIjKlMnOpQrStUvWxYz1234567890AbCdEfGhIjKl,abc123
