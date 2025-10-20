@@ -30,23 +30,93 @@ defmodule Airdropper.CSVParser do
     file_path
     |> File.stream!()
     |> AirdropParser.parse_stream(skip_headers: false)
-    |> Enum.with_index(1)
-    |> Enum.reduce_while({:ok, []}, fn {row, line_num}, {:ok, acc} ->
-      case parse_row(row, line_num) do
-        {:ok, entry} -> {:cont, {:ok, [entry | acc]}}
-        {:error, reason} -> {:halt, {:error, reason}}
-      end
-    end)
-    |> case do
-      {:ok, entries} -> {:ok, Enum.reverse(entries)}
-      error -> error
-    end
+    |> Enum.to_list()
+    |> process_rows()
   rescue
     e in File.Error ->
       {:error, "Failed to read file: #{e.reason}"}
 
     e ->
       {:error, "Unexpected error: #{Exception.message(e)}"}
+  end
+
+  # Process all rows, detecting and skipping headers if present
+  defp process_rows([first_row | rest_rows]) do
+    case detect_header(first_row) do
+      :has_header ->
+        # Skip header row and process the rest
+        parse_rows(rest_rows, 2)
+
+      :no_header ->
+        # Process all rows including the first one
+        parse_rows([first_row | rest_rows], 1)
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp process_rows([]) do
+    {:ok, []}
+  end
+
+  # Detect if first row is a header row
+  defp detect_header([col1, col2]) do
+    normalized_col1 = String.trim(col1) |> String.downcase()
+    normalized_col2 = String.trim(col2) |> String.downcase()
+
+    cond do
+      normalized_col1 == "address" and normalized_col2 == "amount" ->
+        :has_header
+
+      # If first column looks like a header but doesn't match expected format
+      normalized_col1 in ["wallet", "address", "public_key", "pubkey"] and
+          normalized_col2 not in ["amount"] ->
+        {:error, "Invalid CSV headers. Expected: address,amount"}
+
+      # Otherwise assume no header (data row)
+      true ->
+        :no_header
+    end
+  end
+
+  defp detect_header([single_col]) do
+    # Could be a header with only one column - check if it's the word "address"
+    normalized = String.trim(single_col) |> String.downcase()
+
+    if normalized in ["address", "wallet", "public_key", "pubkey"] do
+      {:error, "Invalid CSV headers. Expected: address,amount"}
+    else
+      :no_header
+    end
+  end
+
+  defp detect_header(_other) do
+    :no_header
+  end
+
+  # Parse rows with duplicate detection
+  defp parse_rows(rows, starting_line) do
+    rows
+    |> Enum.with_index(starting_line)
+    |> Enum.reduce_while({:ok, [], MapSet.new()}, fn {row, line_num},
+                                                     {:ok, acc, seen_addresses} ->
+      case parse_row(row, line_num) do
+        {:ok, entry} ->
+          if MapSet.member?(seen_addresses, entry.address) do
+            {:halt, {:error, "Line #{line_num}: Duplicate wallet address '#{entry.address}'"}}
+          else
+            {:cont, {:ok, [entry | acc], MapSet.put(seen_addresses, entry.address)}}
+          end
+
+        {:error, reason} ->
+          {:halt, {:error, reason}}
+      end
+    end)
+    |> case do
+      {:ok, entries, _seen} -> {:ok, Enum.reverse(entries)}
+      {:error, reason} -> {:error, reason}
+    end
   end
 
   # Parses a single CSV row into an airdrop entry.

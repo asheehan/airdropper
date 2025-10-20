@@ -337,6 +337,145 @@ defmodule Airdropper.CSVParserTest do
     end
   end
 
+  describe "parse_file/1 - CSV header validation" do
+    test "accepts CSV with valid headers" do
+      file =
+        create_csv_file("with_headers.csv", """
+        address,amount
+        7xKc9vJR3KqH8Z5mN2pQ1wF6tU4eR8dL9mK5jH3gF2a,1.5
+        8yKd9vJR3KqH8Z5mN2pQ1wF6tU4eR8dK9mJ5jH3gF2b,2.0
+        """)
+
+      assert {:ok, entries} = CSVParser.parse_file(file)
+      assert length(entries) == 2
+      # Should skip header row
+      assert Enum.at(entries, 0).address == "7xKc9vJR3KqH8Z5mN2pQ1wF6tU4eR8dL9mK5jH3gF2a"
+    end
+
+    test "accepts CSV with headers in different case" do
+      file =
+        create_csv_file("headers_case.csv", """
+        Address,Amount
+        7xKc9vJR3KqH8Z5mN2pQ1wF6tU4eR8dL9mK5jH3gF2a,1.5
+        """)
+
+      assert {:ok, entries} = CSVParser.parse_file(file)
+      assert length(entries) == 1
+    end
+
+    test "accepts CSV with headers with extra whitespace" do
+      file =
+        create_csv_file("headers_whitespace.csv", """
+          address  ,  amount
+        7xKc9vJR3KqH8Z5mN2pQ1wF6tU4eR8dL9mK5jH3gF2a,1.5
+        """)
+
+      assert {:ok, entries} = CSVParser.parse_file(file)
+      assert length(entries) == 1
+    end
+
+    test "rejects CSV with invalid header names" do
+      file =
+        create_csv_file("bad_headers.csv", """
+        wallet,price
+        7xKc9vJR3KqH8Z5mN2pQ1wF6tU4eR8dL9mK5jH3gF2a,1.5
+        """)
+
+      assert {:error, error} = CSVParser.parse_file(file)
+      assert error =~ "Invalid CSV headers"
+      assert error =~ "Expected: address,amount"
+    end
+
+    test "rejects CSV with only one header column" do
+      file =
+        create_csv_file("one_header.csv", """
+        address
+        7xKc9vJR3KqH8Z5mN2pQ1wF6tU4eR8dL9mK5jH3gF2a,1.5
+        """)
+
+      assert {:error, error} = CSVParser.parse_file(file)
+      assert error =~ "Invalid CSV headers"
+    end
+
+    test "accepts CSV without headers (for backward compatibility)" do
+      file =
+        create_csv_file("no_headers.csv", """
+        7xKc9vJR3KqH8Z5mN2pQ1wF6tU4eR8dL9mK5jH3gF2a,1.5
+        8yKd9vJR3KqH8Z5mN2pQ1wF6tU4eR8dK9mJ5jH3gF2b,2.0
+        """)
+
+      assert {:ok, entries} = CSVParser.parse_file(file)
+      assert length(entries) == 2
+    end
+  end
+
+  describe "parse_file/1 - duplicate address detection" do
+    test "rejects CSV with duplicate addresses" do
+      file =
+        create_csv_file("duplicates.csv", """
+        7xKc9vJR3KqH8Z5mN2pQ1wF6tU4eR8dL9mK5jH3gF2a,1.5
+        8yKd9vJR3KqH8Z5mN2pQ1wF6tU4eR8dK9mJ5jH3gF2b,2.0
+        7xKc9vJR3KqH8Z5mN2pQ1wF6tU4eR8dL9mK5jH3gF2a,3.0
+        """)
+
+      assert {:error, error} = CSVParser.parse_file(file)
+      assert error =~ "Duplicate wallet address"
+      assert error =~ "7xKc9vJR3KqH8Z5mN2pQ1wF6tU4eR8dL9mK5jH3gF2a"
+      assert error =~ "Line 3"
+    end
+
+    test "rejects CSV with multiple duplicates" do
+      file =
+        create_csv_file("multiple_duplicates.csv", """
+        7xKc9vJR3KqH8Z5mN2pQ1wF6tU4eR8dL9mK5jH3gF2a,1.5
+        8yKd9vJR3KqH8Z5mN2pQ1wF6tU4eR8dK9mJ5jH3gF2b,2.0
+        7xKc9vJR3KqH8Z5mN2pQ1wF6tU4eR8dL9mK5jH3gF2a,3.0
+        8yKd9vJR3KqH8Z5mN2pQ1wF6tU4eR8dK9mJ5jH3gF2b,4.0
+        """)
+
+      assert {:error, error} = CSVParser.parse_file(file)
+      # Should fail on first duplicate encountered (line 3)
+      assert error =~ "Duplicate wallet address"
+      assert error =~ "Line 3"
+    end
+
+    test "accepts CSV with no duplicates" do
+      file =
+        create_csv_file("no_duplicates.csv", """
+        7xKc9vJR3KqH8Z5mN2pQ1wF6tU4eR8dL9mK5jH3gF2a,1.5
+        8yKd9vJR3KqH8Z5mN2pQ1wF6tU4eR8dK9mJ5jH3gF2b,2.0
+        9zMe1xKT5MsJ9B7nP4rS3yH8vW6gT9fN1nM7kJ5iH4c,3.0
+        """)
+
+      assert {:ok, entries} = CSVParser.parse_file(file)
+      assert length(entries) == 3
+    end
+
+    test "duplicate detection is case-sensitive" do
+      file =
+        create_csv_file("case_sensitive.csv", """
+        7xKc9vJR3KqH8Z5mN2pQ1wF6tU4eR8dL9mK5jH3gF2a,1.5
+        7XKC9VJR3KQH8Z5MN2PQ1WF6TU4ER8DL9MK5JH3GF2A,2.0
+        """)
+
+      # These are different addresses (case matters), so should be accepted
+      assert {:ok, entries} = CSVParser.parse_file(file)
+      assert length(entries) == 2
+    end
+
+    test "detects duplicates after trimming whitespace" do
+      file =
+        create_csv_file("whitespace_duplicates.csv", """
+        7xKc9vJR3KqH8Z5mN2pQ1wF6tU4eR8dL9mK5jH3gF2a,1.5
+          7xKc9vJR3KqH8Z5mN2pQ1wF6tU4eR8dL9mK5jH3gF2a  ,2.0
+        """)
+
+      assert {:error, error} = CSVParser.parse_file(file)
+      assert error =~ "Duplicate wallet address"
+      assert error =~ "Line 2"
+    end
+  end
+
   # Helper function to create temporary CSV files for testing
   defp create_csv_file(filename, content) do
     path = Path.join(@fixtures_dir, filename)
