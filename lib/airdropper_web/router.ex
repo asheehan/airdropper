@@ -18,6 +18,7 @@ defmodule AirdropperWeb.Router do
     pipe_through :browser
 
     get "/", PageController, :home
+    live "/airdrop", AirdropLive
   end
 
   # Other scopes may use custom stacks.
