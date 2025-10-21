@@ -69,6 +69,32 @@ defmodule AirdropperWeb.AirdropLive do
   end
 
   @impl true
+  def handle_event("start_airdrop", _params, socket) do
+    # Start the airdrop using the AirdropWorker
+    entries = socket.assigns.parsed_entries
+
+    case Airdropper.AirdropWorker.start_airdrop(Airdropper.AirdropWorker, entries) do
+      :ok ->
+        # Start processing with the mock transfer function
+        process_fn = fn entry ->
+          Airdropper.SolanaTransfer.execute_transfer(entry)
+        end
+
+        Airdropper.AirdropWorker.process_batch(Airdropper.AirdropWorker, process_fn)
+
+        socket =
+          socket
+          |> assign(:processing, true)
+          |> put_flash(:info, "Starting airdrop...")
+
+        {:noreply, socket}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Failed to start airdrop: #{reason}")}
+    end
+  end
+
+  @impl true
   def handle_event("validate", _params, socket) do
     {:noreply, socket}
   end
@@ -268,10 +294,148 @@ defmodule AirdropperWeb.AirdropLive do
                   </div>
                 </div>
               </div>
+
+              <!-- Start Airdrop Button -->
+              <div class="mt-6 card-actions justify-end">
+                <button
+                  phx-click="start_airdrop"
+                  class="btn btn-success btn-lg"
+                  disabled={@processing or @airdrop_status == :processing}
+                >
+                  <%= if @processing do %>
+                    <span class="loading loading-spinner"></span>
+                    Processing...
+                  <% else %>
+                    🚀 Start Airdrop
+                  <% end %>
+                </button>
+              </div>
             </div>
           <% end %>
         </div>
       </div>
+
+      <!-- Progress Dashboard -->
+      <%= if @airdrop_status != :idle or @progress.total > 0 do %>
+        <div class="mt-8 card bg-base-100 shadow-xl">
+          <div class="card-body">
+            <h2 class="card-title">Airdrop Progress</h2>
+
+            <!-- Progress Bar -->
+            <div class="mt-4">
+              <div class="flex justify-between items-center mb-2">
+                <span class="text-sm font-medium">Overall Progress</span>
+                <span class="text-sm font-bold"><%= @progress.percentage %>%</span>
+              </div>
+              <progress
+                class="progress progress-primary w-full h-4"
+                value={@progress.percentage}
+                max="100"
+              >
+              </progress>
+            </div>
+
+            <!-- Stats Grid -->
+            <div class="mt-6 grid grid-cols-1 md:grid-cols-3 gap-4">
+              <!-- Processed Card -->
+              <div class="stat bg-primary/10 rounded-lg">
+                <div class="stat-figure text-primary">
+                  <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"></path>
+                  </svg>
+                </div>
+                <div class="stat-title text-primary">Processed</div>
+                <div class="stat-value text-primary text-3xl"><%= @progress.completed + @progress.failed %></div>
+                <div class="stat-desc">of <%= @progress.total %> total</div>
+              </div>
+
+              <!-- Successful Card -->
+              <div class="stat bg-success/10 rounded-lg">
+                <div class="stat-figure text-success">
+                  <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                  </svg>
+                </div>
+                <div class="stat-title text-success">Successful</div>
+                <div class="stat-value text-success text-3xl"><%= @progress.completed %></div>
+                <div class="stat-desc"><%= if @progress.total > 0, do: Float.round(@progress.completed / @progress.total * 100, 1), else: 0 %>% success rate</div>
+              </div>
+
+              <!-- Failed Card -->
+              <div class="stat bg-error/10 rounded-lg">
+                <div class="stat-figure text-error">
+                  <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                  </svg>
+                </div>
+                <div class="stat-title text-error">Failed</div>
+                <div class="stat-value text-error text-3xl"><%= @progress.failed %></div>
+                <div class="stat-desc"><%= if @progress.total > 0, do: Float.round(@progress.failed / @progress.total * 100, 1), else: 0 %>% failure rate</div>
+              </div>
+            </div>
+
+            <!-- Recent Transfers -->
+            <%= if @recent_transfers != [] do %>
+              <div class="mt-6">
+                <h3 class="font-semibold mb-3">Recent Transfers</h3>
+                <div class="overflow-x-auto">
+                  <table class="table table-sm">
+                    <thead>
+                      <tr>
+                        <th>Address</th>
+                        <th>Status</th>
+                        <th>Signature / Error</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <%= for transfer <- @recent_transfers do %>
+                        <tr>
+                          <td class="font-mono text-xs"><%= String.slice(transfer.address, 0..10) %>...</td>
+                          <td>
+                            <%= if transfer.status == :success do %>
+                              <span class="badge badge-success badge-sm">Success</span>
+                            <% else %>
+                              <span class="badge badge-error badge-sm">Failed</span>
+                            <% end %>
+                          </td>
+                          <td class="font-mono text-xs">
+                            <%= if transfer.signature do %>
+                              <%= String.slice(transfer.signature, 0..10) %>...
+                            <% else %>
+                              <%= transfer.error %>
+                            <% end %>
+                          </td>
+                        </tr>
+                      <% end %>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            <% end %>
+
+            <!-- Status Badge -->
+            <div class="mt-4 flex justify-center">
+              <%= case @airdrop_status do %>
+                <% :processing -> %>
+                  <div class="badge badge-primary badge-lg gap-2">
+                    <span class="loading loading-spinner loading-xs"></span>
+                    Processing
+                  </div>
+                <% :completed -> %>
+                  <div class="badge badge-success badge-lg">
+                    ✓ Completed
+                  </div>
+                <% :failed -> %>
+                  <div class="badge badge-error badge-lg">
+                    ✗ Failed
+                  </div>
+                <% _ -> %>
+                  <div class="badge badge-ghost badge-lg">Idle</div>
+              <% end %>
+            </div>
+          </div>
+        </div>
+      <% end %>
 
       <div class="mt-8 p-6 bg-base-200 rounded-lg">
         <h3 class="font-semibold mb-3">CSV Format Requirements:</h3>
