@@ -198,8 +198,7 @@ defmodule AirdropperWeb.AirdropLive do
                   </svg>
                   <div>
                     <label class="btn btn-primary btn-sm cursor-pointer">
-                      <.live_file_input upload={@uploads.csv_file} class="hidden" />
-                      Choose File
+                      <.live_file_input upload={@uploads.csv_file} class="hidden" /> Choose File
                     </label>
                     <p class="text-sm text-base-content/60 mt-2">
                       or drag and drop
@@ -223,9 +222,9 @@ defmodule AirdropperWeb.AirdropLive do
                         />
                       </svg>
                       <div>
-                        <p class="font-medium"><%= entry.client_name %></p>
+                        <p class="font-medium">{entry.client_name}</p>
                         <p class="text-sm text-base-content/60">
-                          <%= Float.round(entry.client_size / 1_000_000, 2) %> MB
+                          {Float.round(entry.client_size / 1_000_000, 2)} MB
                         </p>
                       </div>
                     </div>
@@ -245,20 +244,20 @@ defmodule AirdropperWeb.AirdropLive do
                     value={entry.progress}
                     max="100"
                   >
-                    <%= entry.progress %>%
+                    {entry.progress}%
                   </progress>
                 </div>
 
                 <%= for err <- upload_errors(@uploads.csv_file, entry) do %>
                   <div class="alert alert-error mt-2">
-                    <span><%= error_to_string(err) %></span>
+                    <span>{error_to_string(err)}</span>
                   </div>
                 <% end %>
               <% end %>
 
               <%= for err <- upload_errors(@uploads.csv_file) do %>
                 <div class="alert alert-error mt-2">
-                  <span><%= error_to_string(err) %></span>
+                  <span>{error_to_string(err)}</span>
                 </div>
               <% end %>
             </div>
@@ -276,7 +275,9 @@ defmodule AirdropperWeb.AirdropLive do
 
           <%= if @parsed_entries != [] do %>
             <div class="mt-6">
-              <h3 class="font-semibold mb-3">Parsed Airdrop Entries (<%= length(@parsed_entries) %> total):</h3>
+              <h3 class="font-semibold mb-3">
+                Parsed Airdrop Entries ({length(@parsed_entries)} total):
+              </h3>
               <div class="overflow-x-auto">
                 <table class="table table-zebra table-sm">
                   <thead>
@@ -290,10 +291,10 @@ defmodule AirdropperWeb.AirdropLive do
                   <tbody>
                     <%= for {entry, idx} <- Enum.with_index(@parsed_entries, 1) do %>
                       <tr>
-                        <td><%= idx %></td>
-                        <td class="font-mono text-xs"><%= entry.address %></td>
-                        <td class="text-right"><%= entry.amount / 1_000_000_000 %></td>
-                        <td class="text-right font-mono text-xs"><%= entry.amount %></td>
+                        <td>{idx}</td>
+                        <td class="font-mono text-xs">{entry.address}</td>
+                        <td class="text-right">{entry.amount / 1_000_000_000}</td>
+                        <td class="text-right font-mono text-xs">{entry.amount}</td>
                       </tr>
                     <% end %>
                   </tbody>
@@ -302,17 +303,17 @@ defmodule AirdropperWeb.AirdropLive do
               <div class="mt-4 stats shadow">
                 <div class="stat">
                   <div class="stat-title">Total Entries</div>
-                  <div class="stat-value text-2xl"><%= length(@parsed_entries) %></div>
+                  <div class="stat-value text-2xl">{length(@parsed_entries)}</div>
                 </div>
                 <div class="stat">
                   <div class="stat-title">Total Amount</div>
                   <div class="stat-value text-2xl">
-                    <%= Enum.sum(Enum.map(@parsed_entries, & &1.amount)) / 1_000_000_000 %> SOL
+                    {Enum.sum(Enum.map(@parsed_entries, & &1.amount)) / 1_000_000_000} SOL
                   </div>
                 </div>
               </div>
-
-              <!-- Start Airdrop Button -->
+              
+    <!-- Start Airdrop Button -->
               <div class="mt-6 card-actions justify-end">
                 <button
                   phx-click="start_airdrop"
@@ -320,8 +321,7 @@ defmodule AirdropperWeb.AirdropLive do
                   disabled={@processing or @airdrop_status == :processing}
                 >
                   <%= if @processing do %>
-                    <span class="loading loading-spinner"></span>
-                    Processing...
+                    <span class="loading loading-spinner"></span> Processing...
                   <% else %>
                     🚀 Start Airdrop
                   <% end %>
@@ -331,18 +331,18 @@ defmodule AirdropperWeb.AirdropLive do
           <% end %>
         </div>
       </div>
-
-      <!-- Progress Dashboard -->
+      
+    <!-- Progress Dashboard -->
       <%= if @airdrop_status != :idle or @progress.total > 0 do %>
         <div class="mt-8 card bg-base-100 shadow-xl">
           <div class="card-body">
             <h2 class="card-title">Airdrop Progress</h2>
-
-            <!-- Progress Bar -->
+            
+    <!-- Progress Bar -->
             <div class="mt-4">
               <div class="flex justify-between items-center mb-2">
                 <span class="text-sm font-medium">Overall Progress</span>
-                <span class="text-sm font-bold"><%= @progress.percentage %>%</span>
+                <span class="text-sm font-bold">{@progress.percentage}%</span>
               </div>
               <progress
                 class="progress progress-primary w-full h-4"
@@ -351,47 +351,75 @@ defmodule AirdropperWeb.AirdropLive do
               >
               </progress>
             </div>
-
-            <!-- Stats Grid -->
+            
+    <!-- Stats Grid -->
             <div class="mt-6 grid grid-cols-1 md:grid-cols-3 gap-4">
               <!-- Processed Card -->
               <div class="stat bg-primary/10 rounded-lg">
                 <div class="stat-figure text-primary">
                   <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"></path>
+                    <path
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      stroke-width="2"
+                      d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"
+                    >
+                    </path>
                   </svg>
                 </div>
                 <div class="stat-title text-primary">Processed</div>
-                <div class="stat-value text-primary text-3xl"><%= @progress.completed + @progress.failed %></div>
-                <div class="stat-desc">of <%= @progress.total %> total</div>
+                <div class="stat-value text-primary text-3xl">
+                  {@progress.completed + @progress.failed}
+                </div>
+                <div class="stat-desc">of {@progress.total} total</div>
               </div>
-
-              <!-- Successful Card -->
+              
+    <!-- Successful Card -->
               <div class="stat bg-success/10 rounded-lg">
                 <div class="stat-figure text-success">
                   <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                    <path
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      stroke-width="2"
+                      d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
+                    >
+                    </path>
                   </svg>
                 </div>
                 <div class="stat-title text-success">Successful</div>
-                <div class="stat-value text-success text-3xl"><%= @progress.completed %></div>
-                <div class="stat-desc"><%= if @progress.total > 0, do: Float.round(@progress.completed / @progress.total * 100, 1), else: 0 %>% success rate</div>
+                <div class="stat-value text-success text-3xl">{@progress.completed}</div>
+                <div class="stat-desc">
+                  {if @progress.total > 0,
+                    do: Float.round(@progress.completed / @progress.total * 100, 1),
+                    else: 0}% success rate
+                </div>
               </div>
-
-              <!-- Failed Card -->
+              
+    <!-- Failed Card -->
               <div class="stat bg-error/10 rounded-lg">
                 <div class="stat-figure text-error">
                   <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                    <path
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      stroke-width="2"
+                      d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z"
+                    >
+                    </path>
                   </svg>
                 </div>
                 <div class="stat-title text-error">Failed</div>
-                <div class="stat-value text-error text-3xl"><%= @progress.failed %></div>
-                <div class="stat-desc"><%= if @progress.total > 0, do: Float.round(@progress.failed / @progress.total * 100, 1), else: 0 %>% failure rate</div>
+                <div class="stat-value text-error text-3xl">{@progress.failed}</div>
+                <div class="stat-desc">
+                  {if @progress.total > 0,
+                    do: Float.round(@progress.failed / @progress.total * 100, 1),
+                    else: 0}% failure rate
+                </div>
               </div>
             </div>
-
-            <!-- Recent Transfers -->
+            
+    <!-- Recent Transfers -->
             <%= if @recent_transfers != [] do %>
               <div class="mt-6">
                 <h3 class="font-semibold mb-3">Recent Transfers</h3>
@@ -407,7 +435,9 @@ defmodule AirdropperWeb.AirdropLive do
                     <tbody>
                       <%= for transfer <- @recent_transfers do %>
                         <tr>
-                          <td class="font-mono text-xs"><%= String.slice(transfer.address, 0..10) %>...</td>
+                          <td class="font-mono text-xs">
+                            {String.slice(transfer.address, 0..10)}...
+                          </td>
                           <td>
                             <%= if transfer.status == :success do %>
                               <span class="badge badge-success badge-sm">Success</span>
@@ -417,9 +447,9 @@ defmodule AirdropperWeb.AirdropLive do
                           </td>
                           <td class="font-mono text-xs">
                             <%= if transfer.signature do %>
-                              <%= String.slice(transfer.signature, 0..10) %>...
+                              {String.slice(transfer.signature, 0..10)}...
                             <% else %>
-                              <%= transfer.error %>
+                              {transfer.error}
                             <% end %>
                           </td>
                         </tr>
@@ -429,14 +459,13 @@ defmodule AirdropperWeb.AirdropLive do
                 </div>
               </div>
             <% end %>
-
-            <!-- Status Badge -->
+            
+    <!-- Status Badge -->
             <div class="mt-4 flex justify-center">
               <%= case @airdrop_status do %>
                 <% :processing -> %>
                   <div class="badge badge-primary badge-lg gap-2">
-                    <span class="loading loading-spinner loading-xs"></span>
-                    Processing
+                    <span class="loading loading-spinner loading-xs"></span> Processing
                   </div>
                 <% :completed -> %>
                   <div class="badge badge-success badge-lg">
@@ -459,7 +488,7 @@ defmodule AirdropperWeb.AirdropLive do
         <div class="mt-8 card bg-base-100 shadow-xl">
           <div class="card-body">
             <h2 class="card-title">Activity Log</h2>
-            <p class="text-sm text-base-content/70">Last <%= length(@activity_log) %> transfers</p>
+            <p class="text-sm text-base-content/70">Last {length(@activity_log)} transfers</p>
 
             <div id="activity-log" class="overflow-y-auto max-h-96 mt-4">
               <table class="table table-sm table-pin-rows">
@@ -475,10 +504,10 @@ defmodule AirdropperWeb.AirdropLive do
                   <%= for transfer <- @activity_log do %>
                     <tr id={"transfer-#{:erlang.phash2(transfer.address)}-#{DateTime.to_unix(transfer.timestamp, :microsecond)}"}>
                       <td class="font-mono text-xs">
-                        <%= Calendar.strftime(transfer.timestamp, "%H:%M:%S") %>
+                        {Calendar.strftime(transfer.timestamp, "%H:%M:%S")}
                       </td>
                       <td class="font-mono text-xs">
-                        <%= String.slice(transfer.address, 0..14) %>...
+                        {String.slice(transfer.address, 0..14)}...
                       </td>
                       <td>
                         <%= if transfer.status == :success do %>
@@ -489,14 +518,14 @@ defmodule AirdropperWeb.AirdropLive do
                       </td>
                       <td class="font-mono text-xs">
                         <%= if transfer.status == :success do %>
-                          <%= String.slice(transfer.signature, 0..14) %>...
+                          {String.slice(transfer.signature, 0..14)}...
                         <% else %>
                           <details class="collapse collapse-arrow bg-base-200">
                             <summary class="collapse-title text-xs min-h-0 py-1 cursor-pointer">
                               View Details
                             </summary>
                             <div class="collapse-content">
-                              <p class="text-xs"><%= transfer.error %></p>
+                              <p class="text-xs">{transfer.error}</p>
                             </div>
                           </details>
                         <% end %>
