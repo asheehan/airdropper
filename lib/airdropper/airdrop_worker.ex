@@ -35,7 +35,8 @@ defmodule Airdropper.AirdropWorker do
           entries: [entry()],
           progress: progress(),
           current_transaction: entry() | nil,
-          results: [result()]
+          results: [result()],
+          expected_completions: non_neg_integer() | nil
         }
 
   # Client API
@@ -227,23 +228,23 @@ defmodule Airdropper.AirdropWorker do
           )
           |> Enum.to_list()
 
-        # Now process results synchronously with their corresponding entries
+        # Tell GenServer how many completions to expect
+        GenServer.cast(parent, {:batch_starting, length(results)})
+
+        # Now send all task completions asynchronously
         results
         |> Enum.zip(state.entries)
         |> Enum.each(fn
           {{:ok, {:ok, signature, entry}}, _} ->
-            GenServer.call(parent, {:task_completed_sync, {:ok, signature, entry}}, :infinity)
+            GenServer.cast(parent, {:task_completed, {:ok, signature, entry}})
 
           {{:ok, {:error, error, entry}}, _} ->
-            GenServer.call(parent, {:task_completed_sync, {:error, error, entry}}, :infinity)
+            GenServer.cast(parent, {:task_completed, {:error, error, entry}})
 
           {{:exit, reason}, entry} ->
             error_result = {:error, "timeout: #{inspect(reason)}", entry}
-            GenServer.call(parent, {:task_completed_sync, error_result}, :infinity)
+            GenServer.cast(parent, {:task_completed, error_result})
         end)
-
-        # All tasks now guaranteed to be processed, send completion
-        GenServer.cast(parent, :batch_completed)
       end)
 
       {:reply, :ok, state}
@@ -251,7 +252,12 @@ defmodule Airdropper.AirdropWorker do
   end
 
   @impl true
-  def handle_call({:task_completed_sync, {:ok, signature, entry}}, _from, state) do
+  def handle_cast({:batch_starting, expected_count}, state) do
+    {:noreply, %{state | expected_completions: expected_count}}
+  end
+
+  @impl true
+  def handle_cast({:task_completed, {:ok, signature, entry}}, state) do
     new_result = %{
       address: entry.address,
       signature: signature,
@@ -278,11 +284,12 @@ defmodule Airdropper.AirdropWorker do
         current_transaction: nil
     }
 
-    {:reply, :ok, new_state}
+    # Check if all tasks are complete
+    check_and_complete_batch(new_state)
   end
 
   @impl true
-  def handle_call({:task_completed_sync, {:error, error, entry}}, _from, state) do
+  def handle_cast({:task_completed, {:error, error, entry}}, state) do
     new_result = %{
       address: entry.address,
       signature: nil,
@@ -309,22 +316,8 @@ defmodule Airdropper.AirdropWorker do
         current_transaction: nil
     }
 
-    {:reply, :ok, new_state}
-  end
-
-  @impl true
-  def handle_cast(:batch_completed, state) do
-    # All tasks completed
-    new_status = if state.progress.failed > 0, do: :completed, else: :completed
-    new_state = %{state | status: new_status}
-
-    # Broadcast final progress update
-    broadcast({:airdrop_progress, new_state.progress})
-
-    # Broadcast final completion
-    broadcast({:airdrop_completed, new_state})
-
-    {:noreply, new_state}
+    # Check if all tasks are complete
+    check_and_complete_batch(new_state)
   end
 
   @impl true
@@ -352,7 +345,8 @@ defmodule Airdropper.AirdropWorker do
         percentage: 0.0
       },
       current_transaction: nil,
-      results: []
+      results: [],
+      expected_completions: nil
     }
   end
 
@@ -374,6 +368,26 @@ defmodule Airdropper.AirdropWorker do
   end
 
   defp calculate_percentage(_completed, 0), do: 0.0
+
+  defp check_and_complete_batch(state) do
+    total_processed = state.progress.completed + state.progress.failed
+
+    if state.expected_completions != nil and total_processed == state.expected_completions do
+      # All tasks completed!
+      new_status = if state.progress.failed > 0, do: :completed, else: :completed
+      completed_state = %{state | status: new_status, expected_completions: nil}
+
+      # Broadcast final progress update
+      broadcast({:airdrop_progress, completed_state.progress})
+
+      # Broadcast final completion
+      broadcast({:airdrop_completed, completed_state})
+
+      {:noreply, completed_state}
+    else
+      {:noreply, state}
+    end
+  end
 
   defp broadcast(message) do
     Phoenix.PubSub.broadcast(Airdropper.PubSub, @pubsub_topic, message)
