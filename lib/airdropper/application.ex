@@ -12,8 +12,8 @@ defmodule Airdropper.Application do
       Airdropper.Repo,
       {DNSCluster, query: Application.get_env(:airdropper, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: Airdropper.PubSub},
-      # Start a worker by calling: Airdropper.Worker.start_link(arg)
-      # {Airdropper.Worker, arg},
+      # Start the AirdropWorker GenServer (automatically named Airdropper.AirdropWorker)
+      Airdropper.AirdropWorker,
       # Start to serve requests, typically the last entry
       AirdropperWeb.Endpoint
     ]
