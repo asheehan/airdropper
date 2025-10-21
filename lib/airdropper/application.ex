@@ -12,6 +12,8 @@ defmodule Airdropper.Application do
       Airdropper.Repo,
       {DNSCluster, query: Application.get_env(:airdropper, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: Airdropper.PubSub},
+      # Start Task.Supervisor for concurrent airdrop processing
+      {Task.Supervisor, name: Airdropper.TaskSupervisor},
       # Start the AirdropWorker GenServer (automatically named Airdropper.AirdropWorker)
       Airdropper.AirdropWorker,
       # Start to serve requests, typically the last entry

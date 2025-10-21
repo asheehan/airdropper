@@ -109,6 +109,19 @@ defmodule Airdropper.AirdropWorker do
     GenServer.call(pid, :reset)
   end
 
+  @doc """
+  Processes entries in batches using Task.Supervisor for concurrent execution.
+
+  ## Options
+  - `:max_concurrency` - Maximum number of concurrent tasks (default: 10)
+  - `:timeout` - Timeout for each task in milliseconds (default: 30_000)
+  - `:task_supervisor` - Name of the Task.Supervisor to use (default: Airdropper.TaskSupervisor)
+  """
+  @spec process_batch(pid(), fun(), keyword()) :: :ok | {:error, atom()}
+  def process_batch(pid, process_fn, opts \\ []) do
+    GenServer.call(pid, {:process_batch, process_fn, opts}, :infinity)
+  end
+
   # Server Callbacks
 
   @impl true
@@ -181,6 +194,142 @@ defmodule Airdropper.AirdropWorker do
     {:reply, :ok, initial_state()}
   end
 
+  @impl true
+  def handle_call({:process_batch, process_fn, opts}, _from, state) do
+    if state.status != :processing do
+      {:reply, {:error, :not_processing}, state}
+    else
+      # Process entries concurrently
+      max_concurrency = Keyword.get(opts, :max_concurrency, 10)
+      timeout = Keyword.get(opts, :timeout, 30_000)
+      task_supervisor_name = Keyword.get(opts, :task_supervisor, Airdropper.TaskSupervisor)
+
+      # Start async processing in a separate process to not block the GenServer
+      parent = self()
+
+      Task.start(fn ->
+        results =
+          Task.Supervisor.async_stream_nolink(
+            task_supervisor_name,
+            state.entries,
+            fn entry ->
+              process_entry(entry, process_fn, timeout)
+            end,
+            max_concurrency: max_concurrency,
+            timeout: timeout,
+            on_timeout: :kill_task
+          )
+          |> Enum.zip(state.entries)
+          |> Enum.map(fn
+            {{:ok, result}, _entry} ->
+              GenServer.cast(parent, {:task_completed, result})
+              result
+
+            {{:exit, reason}, entry} ->
+              error_result = {:error, "timeout: #{inspect(reason)}", entry}
+              GenServer.cast(parent, {:task_completed, error_result})
+              error_result
+          end)
+
+        # Mark as completed when all tasks are done
+        GenServer.cast(parent, :batch_completed)
+        results
+      end)
+
+      {:reply, :ok, state}
+    end
+  end
+
+  @impl true
+  def handle_cast({:task_completed, {:ok, signature, entry}}, state) do
+    new_result = %{
+      address: entry.address,
+      signature: signature,
+      status: :success,
+      error: nil
+    }
+
+    new_progress = %{
+      state.progress
+      | completed: state.progress.completed + 1,
+        percentage: calculate_percentage(state.progress.completed + 1, state.progress.total)
+    }
+
+    {:noreply,
+     %{
+       state
+       | progress: new_progress,
+         results: [new_result | state.results],
+         current_transaction: nil
+     }}
+  end
+
+  @impl true
+  def handle_cast({:task_completed, {:error, error, entry}}, state) do
+    new_result = %{
+      address: entry.address,
+      signature: nil,
+      status: :failed,
+      error: error
+    }
+
+    new_progress = %{
+      state.progress
+      | failed: state.progress.failed + 1,
+        percentage:
+          calculate_percentage(
+            state.progress.completed + state.progress.failed + 1,
+            state.progress.total
+          )
+    }
+
+    {:noreply,
+     %{
+       state
+       | progress: new_progress,
+         results: [new_result | state.results],
+         current_transaction: nil
+     }}
+  end
+
+  @impl true
+  def handle_cast({:task_failed, reason}, state) do
+    # Task crashed or timed out
+    new_progress = %{
+      state.progress
+      | failed: state.progress.failed + 1,
+        percentage:
+          calculate_percentage(
+            state.progress.completed + state.progress.failed + 1,
+            state.progress.total
+          )
+    }
+
+    Logger.warning("Task failed with reason: #{inspect(reason)}")
+
+    {:noreply, %{state | progress: new_progress}}
+  end
+
+  @impl true
+  def handle_cast(:batch_completed, state) do
+    # All tasks completed
+    new_status = if state.progress.failed > 0, do: :completed, else: :completed
+
+    {:noreply, %{state | status: new_status}}
+  end
+
+  @impl true
+  def terminate(_reason, state) do
+    # Graceful shutdown - let ongoing tasks complete
+    if state.status == :processing do
+      Logger.info("AirdropWorker terminating, waiting for tasks to complete...")
+      # Give tasks a brief moment to finish
+      Process.sleep(1000)
+    end
+
+    :ok
+  end
+
   # Private Functions
 
   defp initial_state do
@@ -197,4 +346,23 @@ defmodule Airdropper.AirdropWorker do
       results: []
     }
   end
+
+  defp process_entry(entry, process_fn, _timeout) do
+    try do
+      case process_fn.(entry) do
+        {:ok, signature} -> {:ok, signature, entry}
+        {:error, reason} -> {:error, reason, entry}
+        other -> {:error, "unexpected_return: #{inspect(other)}", entry}
+      end
+    catch
+      kind, reason ->
+        {:error, "#{kind}: #{inspect(reason)}", entry}
+    end
+  end
+
+  defp calculate_percentage(completed, total) when total > 0 do
+    Float.round(completed / total * 100, 2)
+  end
+
+  defp calculate_percentage(_completed, 0), do: 0.0
 end

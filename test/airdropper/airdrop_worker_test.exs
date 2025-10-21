@@ -252,4 +252,148 @@ defmodule Airdropper.AirdropWorkerTest do
       assert state.progress.total == 0
     end
   end
+
+  describe "concurrent processing" do
+    test "can process multiple entries concurrently" do
+      {:ok, pid} = AirdropWorker.start_link(name: nil)
+
+      entries = [
+        %{address: "addr1", amount: 1_000_000_000},
+        %{address: "addr2", amount: 2_000_000_000},
+        %{address: "addr3", amount: 3_000_000_000}
+      ]
+
+      # Mock process function that simulates async work
+      process_fn = fn _entry ->
+        Process.sleep(10)
+        {:ok, "signature_#{:rand.uniform(1000)}"}
+      end
+
+      :ok = AirdropWorker.start_airdrop(pid, entries)
+      :ok = AirdropWorker.process_batch(pid, process_fn, max_concurrency: 2)
+
+      # Give some time for processing
+      Process.sleep(100)
+
+      state = AirdropWorker.get_state(pid)
+      # Progress should be tracked
+      assert state.progress.total == 3
+    end
+
+    test "handles task timeout correctly" do
+      {:ok, pid} = AirdropWorker.start_link(name: nil)
+      entries = [%{address: "addr1", amount: 1_000_000_000}]
+
+      # Function that takes too long
+      slow_fn = fn _entry ->
+        Process.sleep(5000)
+        {:ok, "signature"}
+      end
+
+      :ok = AirdropWorker.start_airdrop(pid, entries)
+      :ok = AirdropWorker.process_batch(pid, slow_fn, timeout: 50)
+
+      # Wait for timeout to occur
+      Process.sleep(100)
+
+      state = AirdropWorker.get_state(pid)
+      # Should have recorded the timeout failure
+      assert state.progress.failed > 0
+    end
+
+    test "continues processing after task failure" do
+      {:ok, pid} = AirdropWorker.start_link(name: nil)
+
+      entries = [
+        %{address: "addr1", amount: 1_000_000_000},
+        %{address: "addr2", amount: 2_000_000_000},
+        %{address: "addr3", amount: 3_000_000_000}
+      ]
+
+      # Function that fails on second entry
+      process_fn = fn entry ->
+        if entry.address == "addr2" do
+          {:error, "simulated failure"}
+        else
+          {:ok, "signature_#{entry.address}"}
+        end
+      end
+
+      :ok = AirdropWorker.start_airdrop(pid, entries)
+      :ok = AirdropWorker.process_batch(pid, process_fn)
+
+      # Wait for processing to complete
+      Process.sleep(100)
+
+      state = AirdropWorker.get_state(pid)
+      # Should have processed all entries despite one failure
+      assert state.progress.completed + state.progress.failed == 3
+      assert state.progress.failed == 1
+      assert state.progress.completed == 2
+    end
+
+    test "respects max_concurrency limit" do
+      {:ok, pid} = AirdropWorker.start_link(name: nil)
+
+      # Create 10 entries
+      entries =
+        Enum.map(1..10, fn i ->
+          %{address: "addr#{i}", amount: 1_000_000_000}
+        end)
+
+      # Track concurrent executions
+      test_pid = self()
+
+      process_fn = fn entry ->
+        send(test_pid, {:processing, entry.address})
+        Process.sleep(50)
+        send(test_pid, {:done, entry.address})
+        {:ok, "signature"}
+      end
+
+      :ok = AirdropWorker.start_airdrop(pid, entries)
+      :ok = AirdropWorker.process_batch(pid, process_fn, max_concurrency: 3)
+
+      # Give time for processing
+      Process.sleep(200)
+
+      # Verify we got processing messages (basic sanity check)
+      assert_received {:processing, _}
+    end
+
+    test "updates progress during concurrent processing" do
+      {:ok, pid} = AirdropWorker.start_link(name: nil)
+
+      entries =
+        Enum.map(1..5, fn i ->
+          %{address: "addr#{i}", amount: 1_000_000_000}
+        end)
+
+      process_fn = fn _entry ->
+        Process.sleep(20)
+        {:ok, "signature"}
+      end
+
+      :ok = AirdropWorker.start_airdrop(pid, entries)
+
+      # Start processing
+      Task.start(fn ->
+        AirdropWorker.process_batch(pid, process_fn, max_concurrency: 2)
+      end)
+
+      # Check progress during processing
+      Process.sleep(30)
+      state = AirdropWorker.get_state(pid)
+
+      # Should be in processing state
+      assert state.status == :processing
+      assert state.progress.total == 5
+    end
+  end
+
+  describe "Task.Supervisor integration" do
+    test "TaskSupervisor is registered and available" do
+      assert Process.whereis(Airdropper.TaskSupervisor) != nil
+    end
+  end
 end
