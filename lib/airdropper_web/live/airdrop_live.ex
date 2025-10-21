@@ -18,6 +18,7 @@ defmodule AirdropperWeb.AirdropLive do
       |> assign(:airdrop_status, :idle)
       |> assign(:progress, %{total: 0, completed: 0, failed: 0, percentage: 0.0})
       |> assign(:recent_transfers, [])
+      |> assign(:activity_log, [])
       |> allow_upload(:csv_file,
         accept: ~w(.csv),
         max_entries: 1,
@@ -42,10 +43,26 @@ defmodule AirdropperWeb.AirdropLive do
 
   @impl true
   def handle_info({:transfer_completed, result}, socket) do
-    # Add to recent transfers (keep last 10)
-    recent_transfers = [result | socket.assigns.recent_transfers] |> Enum.take(10)
+    # Add timestamp if not present
+    result_with_timestamp =
+      if Map.has_key?(result, :timestamp) do
+        result
+      else
+        Map.put(result, :timestamp, DateTime.utc_now())
+      end
 
-    {:noreply, assign(socket, :recent_transfers, recent_transfers)}
+    # Add to recent transfers (keep last 10)
+    recent_transfers = [result_with_timestamp | socket.assigns.recent_transfers] |> Enum.take(10)
+
+    # Add to activity log (keep last 100)
+    activity_log = [result_with_timestamp | socket.assigns.activity_log] |> Enum.take(100)
+
+    socket =
+      socket
+      |> assign(:recent_transfers, recent_transfers)
+      |> assign(:activity_log, activity_log)
+
+    {:noreply, socket}
   end
 
   @impl true
@@ -432,6 +449,62 @@ defmodule AirdropperWeb.AirdropLive do
                 <% _ -> %>
                   <div class="badge badge-ghost badge-lg">Idle</div>
               <% end %>
+            </div>
+          </div>
+        </div>
+      <% end %>
+
+      <%= if @activity_log != [] do %>
+        <!-- Activity Log -->
+        <div class="mt-8 card bg-base-100 shadow-xl">
+          <div class="card-body">
+            <h2 class="card-title">Activity Log</h2>
+            <p class="text-sm text-base-content/70">Last <%= length(@activity_log) %> transfers</p>
+
+            <div id="activity-log" class="overflow-y-auto max-h-96 mt-4">
+              <table class="table table-sm table-pin-rows">
+                <thead>
+                  <tr>
+                    <th>Time</th>
+                    <th>Address</th>
+                    <th>Status</th>
+                    <th>Signature / Error</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <%= for transfer <- @activity_log do %>
+                    <tr id={"transfer-#{:erlang.phash2(transfer.address)}-#{DateTime.to_unix(transfer.timestamp, :microsecond)}"}>
+                      <td class="font-mono text-xs">
+                        <%= Calendar.strftime(transfer.timestamp, "%H:%M:%S") %>
+                      </td>
+                      <td class="font-mono text-xs">
+                        <%= String.slice(transfer.address, 0..14) %>...
+                      </td>
+                      <td>
+                        <%= if transfer.status == :success do %>
+                          <span class="text-success">✓</span>
+                        <% else %>
+                          <span class="text-error">✗</span>
+                        <% end %>
+                      </td>
+                      <td class="font-mono text-xs">
+                        <%= if transfer.status == :success do %>
+                          <%= String.slice(transfer.signature, 0..14) %>...
+                        <% else %>
+                          <details class="collapse collapse-arrow bg-base-200">
+                            <summary class="collapse-title text-xs min-h-0 py-1 cursor-pointer">
+                              View Details
+                            </summary>
+                            <div class="collapse-content">
+                              <p class="text-xs"><%= transfer.error %></p>
+                            </div>
+                          </details>
+                        <% end %>
+                      </td>
+                    </tr>
+                  <% end %>
+                </tbody>
+              </table>
             </div>
           </div>
         </div>
