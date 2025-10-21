@@ -13,6 +13,8 @@ defmodule Airdropper.AirdropWorker do
 
   require Logger
 
+  @pubsub_topic "airdrop:progress"
+
   @type status :: :idle | :processing | :paused | :completed | :failed
   @type entry :: %{address: String.t(), amount: non_neg_integer()}
   @type progress :: %{
@@ -157,6 +159,9 @@ defmodule Airdropper.AirdropWorker do
             results: []
         }
 
+        # Broadcast airdrop started
+        broadcast({:airdrop_started, %{total: length(entries)}})
+
         {:reply, :ok, new_state}
     end
   end
@@ -208,6 +213,7 @@ defmodule Airdropper.AirdropWorker do
       parent = self()
 
       Task.start(fn ->
+        # Collect all results first (forces stream evaluation)
         results =
           Task.Supervisor.async_stream_nolink(
             task_supervisor_name,
@@ -219,21 +225,25 @@ defmodule Airdropper.AirdropWorker do
             timeout: timeout,
             on_timeout: :kill_task
           )
-          |> Enum.zip(state.entries)
-          |> Enum.map(fn
-            {{:ok, result}, _entry} ->
-              GenServer.cast(parent, {:task_completed, result})
-              result
+          |> Enum.to_list()
 
-            {{:exit, reason}, entry} ->
-              error_result = {:error, "timeout: #{inspect(reason)}", entry}
-              GenServer.cast(parent, {:task_completed, error_result})
-              error_result
-          end)
-
-        # Mark as completed when all tasks are done
-        GenServer.cast(parent, :batch_completed)
+        # Now process results synchronously with their corresponding entries
         results
+        |> Enum.zip(state.entries)
+        |> Enum.each(fn
+          {{:ok, {:ok, signature, entry}}, _} ->
+            GenServer.call(parent, {:task_completed_sync, {:ok, signature, entry}}, :infinity)
+
+          {{:ok, {:error, error, entry}}, _} ->
+            GenServer.call(parent, {:task_completed_sync, {:error, error, entry}}, :infinity)
+
+          {{:exit, reason}, entry} ->
+            error_result = {:error, "timeout: #{inspect(reason)}", entry}
+            GenServer.call(parent, {:task_completed_sync, error_result}, :infinity)
+        end)
+
+        # All tasks now guaranteed to be processed, send completion
+        GenServer.cast(parent, :batch_completed)
       end)
 
       {:reply, :ok, state}
@@ -241,7 +251,7 @@ defmodule Airdropper.AirdropWorker do
   end
 
   @impl true
-  def handle_cast({:task_completed, {:ok, signature, entry}}, state) do
+  def handle_call({:task_completed_sync, {:ok, signature, entry}}, _from, state) do
     new_result = %{
       address: entry.address,
       signature: signature,
@@ -249,23 +259,30 @@ defmodule Airdropper.AirdropWorker do
       error: nil
     }
 
+    new_completed = state.progress.completed + 1
+
     new_progress = %{
       state.progress
-      | completed: state.progress.completed + 1,
-        percentage: calculate_percentage(state.progress.completed + 1, state.progress.total)
+      | completed: new_completed,
+        percentage:
+          calculate_percentage(new_completed + state.progress.failed, state.progress.total)
     }
 
-    {:noreply,
-     %{
-       state
-       | progress: new_progress,
-         results: [new_result | state.results],
-         current_transaction: nil
-     }}
+    # Broadcast individual transfer completion
+    broadcast({:transfer_completed, new_result})
+
+    new_state = %{
+      state
+      | progress: new_progress,
+        results: [new_result | state.results],
+        current_transaction: nil
+    }
+
+    {:reply, :ok, new_state}
   end
 
   @impl true
-  def handle_cast({:task_completed, {:error, error, entry}}, state) do
+  def handle_call({:task_completed_sync, {:error, error, entry}}, _from, state) do
     new_result = %{
       address: entry.address,
       signature: nil,
@@ -273,49 +290,41 @@ defmodule Airdropper.AirdropWorker do
       error: error
     }
 
+    new_failed = state.progress.failed + 1
+
     new_progress = %{
       state.progress
-      | failed: state.progress.failed + 1,
+      | failed: new_failed,
         percentage:
-          calculate_percentage(
-            state.progress.completed + state.progress.failed + 1,
-            state.progress.total
-          )
+          calculate_percentage(state.progress.completed + new_failed, state.progress.total)
     }
 
-    {:noreply,
-     %{
-       state
-       | progress: new_progress,
-         results: [new_result | state.results],
-         current_transaction: nil
-     }}
-  end
+    # Broadcast individual transfer failure
+    broadcast({:transfer_completed, new_result})
 
-  @impl true
-  def handle_cast({:task_failed, reason}, state) do
-    # Task crashed or timed out
-    new_progress = %{
-      state.progress
-      | failed: state.progress.failed + 1,
-        percentage:
-          calculate_percentage(
-            state.progress.completed + state.progress.failed + 1,
-            state.progress.total
-          )
+    new_state = %{
+      state
+      | progress: new_progress,
+        results: [new_result | state.results],
+        current_transaction: nil
     }
 
-    Logger.warning("Task failed with reason: #{inspect(reason)}")
-
-    {:noreply, %{state | progress: new_progress}}
+    {:reply, :ok, new_state}
   end
 
   @impl true
   def handle_cast(:batch_completed, state) do
     # All tasks completed
     new_status = if state.progress.failed > 0, do: :completed, else: :completed
+    new_state = %{state | status: new_status}
 
-    {:noreply, %{state | status: new_status}}
+    # Broadcast final progress update
+    broadcast({:airdrop_progress, new_state.progress})
+
+    # Broadcast final completion
+    broadcast({:airdrop_completed, new_state})
+
+    {:noreply, new_state}
   end
 
   @impl true
@@ -365,4 +374,8 @@ defmodule Airdropper.AirdropWorker do
   end
 
   defp calculate_percentage(_completed, 0), do: 0.0
+
+  defp broadcast(message) do
+    Phoenix.PubSub.broadcast(Airdropper.PubSub, @pubsub_topic, message)
+  end
 end

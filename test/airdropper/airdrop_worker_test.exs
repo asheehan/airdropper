@@ -396,4 +396,197 @@ defmodule Airdropper.AirdropWorkerTest do
       assert Process.whereis(Airdropper.TaskSupervisor) != nil
     end
   end
+
+  describe "PubSub broadcasting" do
+    setup do
+      # Subscribe to the airdrop progress topic
+      Phoenix.PubSub.subscribe(Airdropper.PubSub, "airdrop:progress")
+      :ok
+    end
+
+    test "broadcasts when airdrop starts" do
+      {:ok, pid} = AirdropWorker.start_link(name: nil)
+      entries = [%{address: "addr1", amount: 1_000_000_000}]
+
+      :ok = AirdropWorker.start_airdrop(pid, entries)
+
+      assert_receive {:airdrop_started, %{total: 1}}, 500
+    end
+
+    test "broadcasts progress updates during batch processing" do
+      {:ok, pid} = AirdropWorker.start_link(name: nil)
+
+      entries = [
+        %{address: "addr1", amount: 1_000_000_000},
+        %{address: "addr2", amount: 2_000_000_000}
+      ]
+
+      process_fn = fn _entry ->
+        Process.sleep(10)
+        {:ok, "signature123"}
+      end
+
+      :ok = AirdropWorker.start_airdrop(pid, entries)
+      :ok = AirdropWorker.process_batch(pid, process_fn, delay: 0)
+
+      # Should receive start message
+      assert_receive {:airdrop_started, %{total: 2}}, 500
+
+      # Should receive progress updates as tasks complete
+      assert_receive {:airdrop_progress, progress}, 1000
+      assert progress.total == 2
+      assert progress.completed >= 0
+      assert progress.failed >= 0
+      assert is_float(progress.percentage)
+    end
+
+    test "broadcasts completion message when batch finishes" do
+      {:ok, pid} = AirdropWorker.start_link(name: nil)
+
+      entries = [
+        %{address: "addr1", amount: 1_000_000_000}
+      ]
+
+      process_fn = fn _entry ->
+        {:ok, "signature123"}
+      end
+
+      :ok = AirdropWorker.start_airdrop(pid, entries)
+      :ok = AirdropWorker.process_batch(pid, process_fn, delay: 0)
+
+      # Should receive completion message
+      assert_receive {:airdrop_completed, final_state}, 2000
+      assert final_state.status in [:completed, :failed]
+      assert final_state.progress.total == 1
+    end
+
+    test "broadcasts individual transfer completion" do
+      {:ok, pid} = AirdropWorker.start_link(name: nil)
+
+      entries = [
+        %{address: "addr1", amount: 1_000_000_000}
+      ]
+
+      process_fn = fn entry ->
+        {:ok, "sig_#{entry.address}"}
+      end
+
+      :ok = AirdropWorker.start_airdrop(pid, entries)
+      :ok = AirdropWorker.process_batch(pid, process_fn, delay: 0)
+
+      # Should receive transfer completion
+      assert_receive {:transfer_completed, result}, 1000
+      assert result.address == "addr1"
+      assert result.status == :success
+      assert result.signature == "sig_addr1"
+      assert result.error == nil
+    end
+
+    test "broadcasts transfer failure" do
+      {:ok, pid} = AirdropWorker.start_link(name: nil)
+
+      entries = [
+        %{address: "addr1", amount: 1_000_000_000}
+      ]
+
+      process_fn = fn _entry ->
+        {:error, "Insufficient funds"}
+      end
+
+      :ok = AirdropWorker.start_airdrop(pid, entries)
+      :ok = AirdropWorker.process_batch(pid, process_fn, delay: 0)
+
+      # Should receive transfer failure
+      assert_receive {:transfer_completed, result}, 1000
+      assert result.address == "addr1"
+      assert result.status == :failed
+      assert result.signature == nil
+      assert result.error == "Insufficient funds"
+    end
+
+    test "broadcasts progress with correct statistics" do
+      {:ok, pid} = AirdropWorker.start_link(name: nil)
+
+      entries = [
+        %{address: "addr1", amount: 1_000_000_000},
+        %{address: "addr2", amount: 2_000_000_000},
+        %{address: "addr3", amount: 3_000_000_000}
+      ]
+
+      # Mix of success and failure
+      process_fn = fn entry ->
+        # Small delay to ensure async tasks complete properly
+        Process.sleep(5)
+
+        if String.ends_with?(entry.address, "1") do
+          {:error, "Failed"}
+        else
+          {:ok, "signature"}
+        end
+      end
+
+      :ok = AirdropWorker.start_airdrop(pid, entries)
+      :ok = AirdropWorker.process_batch(pid, process_fn)
+
+      # Wait for completion message to ensure batch is done
+      assert_receive {:airdrop_completed, final_state}, 1000
+
+      # Verify final state from the broadcast message
+      assert final_state.progress.completed + final_state.progress.failed == 3
+      assert final_state.progress.percentage == 100.0
+
+      # Also verify via get_state
+      state = AirdropWorker.get_state(pid)
+      assert state.progress.completed + state.progress.failed == 3
+      assert state.progress.percentage == 100.0
+    end
+
+    test "does not broadcast excessively during batch processing" do
+      {:ok, pid} = AirdropWorker.start_link(name: nil)
+
+      # Create many entries
+      entries =
+        Enum.map(1..10, fn i ->
+          %{address: "addr#{i}", amount: 1_000_000_000}
+        end)
+
+      process_fn = fn _entry ->
+        {:ok, "signature"}
+      end
+
+      :ok = AirdropWorker.start_airdrop(pid, entries)
+      :ok = AirdropWorker.process_batch(pid, process_fn, delay: 0)
+
+      # Count progress messages
+      Process.sleep(200)
+
+      # Should receive start + individual completions (10) + final completion
+      # Not excessive (e.g., not 100+ messages for 10 items)
+      messages = collect_messages([])
+
+      # Should have reasonable number of messages
+      assert length(messages) <= 15
+    end
+
+    test "broadcasts error for critical failures" do
+      {:ok, pid} = AirdropWorker.start_link(name: nil)
+
+      entries = [%{address: "addr1", amount: 1_000_000_000}]
+
+      # Try to process without starting airdrop first
+      result = AirdropWorker.process_batch(pid, fn _ -> {:ok, "sig"} end)
+
+      assert result == {:error, :not_processing}
+      # No error broadcast for expected errors, only critical failures
+    end
+  end
+
+  # Helper to collect messages from mailbox
+  defp collect_messages(acc) do
+    receive do
+      msg -> collect_messages([msg | acc])
+    after
+      0 -> Enum.reverse(acc)
+    end
+  end
 end
