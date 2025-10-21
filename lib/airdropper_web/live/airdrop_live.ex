@@ -5,11 +5,19 @@ defmodule AirdropperWeb.AirdropLive do
 
   @impl true
   def mount(_params, _session, socket) do
+    # Subscribe to airdrop progress updates
+    if connected?(socket) do
+      Phoenix.PubSub.subscribe(Airdropper.PubSub, "airdrop:progress")
+    end
+
     socket =
       socket
       |> assign(:parsed_entries, [])
       |> assign(:processing, false)
       |> assign(:error_message, nil)
+      |> assign(:airdrop_status, :idle)
+      |> assign(:progress, %{total: 0, completed: 0, failed: 0, percentage: 0.0})
+      |> assign(:recent_transfers, [])
       |> allow_upload(:csv_file,
         accept: ~w(.csv),
         max_entries: 1,
@@ -18,6 +26,46 @@ defmodule AirdropperWeb.AirdropLive do
       )
 
     {:ok, socket}
+  end
+
+  @impl true
+  def handle_info({:airdrop_started, %{total: total}}, socket) do
+    socket =
+      socket
+      |> assign(:airdrop_status, :processing)
+      |> assign(:progress, %{total: total, completed: 0, failed: 0, percentage: 0.0})
+      |> assign(:recent_transfers, [])
+      |> put_flash(:info, "Airdrop started! Processing #{total} transfers...")
+
+    {:noreply, socket}
+  end
+
+  @impl true
+  def handle_info({:transfer_completed, result}, socket) do
+    # Add to recent transfers (keep last 10)
+    recent_transfers = [result | socket.assigns.recent_transfers] |> Enum.take(10)
+
+    {:noreply, assign(socket, :recent_transfers, recent_transfers)}
+  end
+
+  @impl true
+  def handle_info({:airdrop_progress, progress}, socket) do
+    {:noreply, assign(socket, :progress, progress)}
+  end
+
+  @impl true
+  def handle_info({:airdrop_completed, final_state}, socket) do
+    socket =
+      socket
+      |> assign(:airdrop_status, final_state.status)
+      |> assign(:progress, final_state.progress)
+      |> assign(:processing, false)
+      |> put_flash(
+        :info,
+        "Airdrop completed! #{final_state.progress.completed} successful, #{final_state.progress.failed} failed"
+      )
+
+    {:noreply, socket}
   end
 
   @impl true
